@@ -35,10 +35,10 @@ shared_log = []
 def chat_with_bot(bot_name, message, speaker="You"):
     bot = BOTS[bot_name]
 
-    # Build context from shared log so bot knows what others said
+    # Build context from shared log
     context = "\n".join([f"{entry['speaker']}: {entry['message']}" for entry in shared_log[-10:]])
 
-    full_message = f"Chat history:\n{context}\n\n{speaker} says: {message}\n\nRespond naturally as {bot_name}."
+    full_message = f"Recent chat:\n{context}\n\n{speaker} just said: {message}\n\nReply as {bot_name} in 2-3 sentences. Output your reply text only, nothing else."
 
     bot["history"].append({"role": "user", "content": full_message})
 
@@ -47,7 +47,12 @@ def chat_with_bot(bot_name, message, speaker="You"):
         messages=[{"role": "system", "content": bot["system"]}] + bot["history"][-6:]
     )
 
-    reply = response["message"]["content"]
+    reply = response["message"]["content"].strip()
+
+    # Clean up any accidental name prefixes the model might still add
+    for name in list(BOTS.keys()) + ["You"]:
+        if reply.startswith(f"{name}:"):
+            reply = reply[len(f"{name}:"):].strip()
 
     bot["history"].append({"role": "assistant", "content": reply})
 
