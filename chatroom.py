@@ -1,44 +1,80 @@
 import ollama
+import random
+import time
 from rich.console import Console
 from rich.panel import Panel
-import random
 
 console = Console()
 MODEL = "llama3.2:1b"
 
 BOTS = {
     "Arin": {
-        "system": "You are Arin, a passionate ML Engineer in an informal group chat with fellow engineers. You love ML, neural networks, and data. You are enthusiastic and slightly nerdy. Keep responses to 2-3 sentences max. Be casual and fun. IMPORTANT: Reply with ONLY your message text. No names, no labels, no prefixes whatsoever.",
+        "system": "You are Arin, a passionate ML Engineer in an informal group chat. You love ML, neural networks, and data. Enthusiastic and slightly nerdy. IMPORTANT: Reply with ONLY your message text. No names, no labels, no prefixes. No quotation marks around your reply.",
         "color": "cyan",
-        "history": []
+        "history": [],
+        "silent_streak": 0  # tracks how many times in a row they stayed quiet
     },
     "Dev": {
-        "system": "You are Dev, a pragmatic DevOps Engineer in an informal group chat with fellow engineers. You think about infra, deployment, and cost. Slightly sarcastic but friendly. Keep responses to 2-3 sentences max. Be casual and fun. IMPORTANT: Reply with ONLY your message text. No names, no labels, no prefixes whatsoever.",
+        "system": "You are Dev, a pragmatic DevOps Engineer in an informal group chat. You think about infra, deployment, cost. Slightly sarcastic but friendly. IMPORTANT: Reply with ONLY your message text. No names, no labels, no prefixes. No quotation marks around your reply.",
         "color": "green",
-        "history": []
+        "history": [],
+        "silent_streak": 0
     },
     "Rex": {
-        "system": "You are Rex, a no-nonsense Backend Engineer in an informal group chat with fellow engineers. You are pragmatic, love clean code, hate over-engineering. Keep responses to 2-3 sentences max. Be casual and fun. IMPORTANT: Reply with ONLY your message text. No names, no labels, no prefixes whatsoever.",
+        "system": "You are Rex, a no-nonsense Backend Engineer in an informal group chat. Pragmatic, loves clean code, hates over-engineering. IMPORTANT: Reply with ONLY your message text. No names, no labels, no prefixes. No quotation marks around your reply.",
         "color": "yellow",
-        "history": []
+        "history": [],
+        "silent_streak": 0
     },
     "Chip": {
-        "system": "You are Chip, the funny one in an informal group chat with fellow engineers. You crack jokes, use puns, keep things light but are technically sound. Keep responses to 2-3 sentences max. Always sneak in a joke or witty remark. IMPORTANT: Reply with ONLY your message text. No names, no labels, no prefixes whatsoever.",
+        "system": "You are Chip, the funny one in an informal group chat. You crack jokes, use puns, keep things light but are technically sound. IMPORTANT: Reply with ONLY your message text. No names, no labels, no prefixes. No quotation marks around your reply.",
         "color": "magenta",
-        "history": []
+        "history": [],
+        "silent_streak": 0
     },
 }
 
-# Shared chat log — everyone can see what everyone said
 shared_log = []
 
-def chat_with_bot(bot_name, message, speaker="You"):
+SHORT_REPLY_PHRASES = [
+    "lol", "haha", "facts", "true", "wait what?", "lmao",
+    "exactly", "this ^^", "+1", "no way", "mood", "big true",
+    "💀", "bruh", "ok ok", "fair enough", "based"
+]
+
+def get_reply_style():
+    """Randomly decide how long a reply should be."""
+    roll = random.random()
+    if roll < 0.15:
+        return "very_short"   # one word / emoji reaction
+    elif roll < 0.35:
+        return "short"        # one sentence
+    else:
+        return "normal"       # 2-3 sentences
+
+def build_style_instruction(style):
+    if style == "very_short":
+        return "Reply with a single short reaction — like 'lol', 'facts', 'wait what?', 'true', '+1', or a single emoji. Nothing more."
+    elif style == "short":
+        return "Reply in exactly one casual sentence."
+    else:
+        return "Reply in 2-3 casual sentences."
+
+def chat_with_bot(bot_name, message, speaker="You", style="normal"):
     bot = BOTS[bot_name]
 
-    # Build context from shared log
-    context = "\n".join([f"{entry['speaker']}: {entry['message']}" for entry in shared_log[-10:]])
+    context = "\n".join([
+        f"{entry['speaker']}: {entry['message']}"
+        for entry in shared_log[-10:]
+    ])
 
-    full_message = f"Recent chat:\n{context}\n\n{speaker} just said: {message}\n\nReply as {bot_name} in 2-3 sentences. Output your reply text only, nothing else."
+    style_instruction = build_style_instruction(style)
+
+    full_message = (
+        f"Recent chat:\n{context}\n\n"
+        f"{speaker} just said: {message}\n\n"
+        f"{style_instruction} Output your reply text only, nothing else."
+    )
 
     bot["history"].append({"role": "user", "content": full_message})
 
@@ -49,14 +85,40 @@ def chat_with_bot(bot_name, message, speaker="You"):
 
     reply = response["message"]["content"].strip()
 
-    # Clean up any accidental name prefixes the model might still add
+    # Clean up accidental name prefixes
     for name in list(BOTS.keys()) + ["You"]:
-        if reply.startswith(f"{name}:"):
+        if reply.lower().startswith(f"{name}:".lower()):
             reply = reply[len(f"{name}:"):].strip()
 
     bot["history"].append({"role": "assistant", "content": reply})
+    bot["silent_streak"] = 0
 
     return reply
+
+def decide_who_responds(message):
+    """Decide which bots respond this round."""
+    responders = []
+
+    for bot_name, bot in BOTS.items():
+        # If a bot has been silent too long, force them in
+        if bot["silent_streak"] >= 3:
+            responders.append(bot_name)
+            continue
+
+        # If directly mentioned, always respond
+        if bot_name.lower() in message.lower():
+            responders.append(bot_name)
+            continue
+
+        # Otherwise random chance
+        if random.random() < 0.55:
+            responders.append(bot_name)
+
+    # Always at least 1 bot responds
+    if not responders:
+        responders.append(random.choice(list(BOTS.keys())))
+
+    return responders
 
 def display_message(speaker, message, color="white"):
     console.print(Panel(
@@ -64,74 +126,103 @@ def display_message(speaker, message, color="white"):
         title=f"[bold {color}]{speaker}[/bold {color}]",
         border_style=color
     ))
-    console.print()
 
-def bot_to_bot_round(trigger_bot, trigger_message):
-    """After trigger_bot speaks, one random other bot reacts to them."""
-    other_bots = [name for name in BOTS if name != trigger_bot]
-    reactor = random.choice(other_bots)
+def typing_delay():
+    """Simulate someone typing."""
+    time.sleep(random.uniform(0.4, 1.0))
 
-    reaction_prompt = f"React briefly to what {trigger_bot} just said: '{trigger_message}'"
-    reaction = chat_with_bot(reactor, reaction_prompt, speaker=trigger_bot)
-
-    shared_log.append({"speaker": reactor, "message": reaction})
-    display_message(reactor, reaction, BOTS[reactor]["color"])
-
-    return reactor, reaction
+def maybe_late_joiner(responders):
+    """
+    After main responses, a bot that stayed silent
+    has a 25% chance to suddenly chime in briefly.
+    """
+    silent_bots = [name for name in BOTS if name not in responders]
+    if silent_bots and random.random() < 0.25:
+        late_bot = random.choice(silent_bots)
+        style = "very_short"
+        last_entry = shared_log[-1] if shared_log else None
+        if last_entry:
+            reply = chat_with_bot(late_bot, last_entry["message"], speaker=last_entry["speaker"], style=style)
+            shared_log.append({"speaker": late_bot, "message": reply})
+            typing_delay()
+            display_message(late_bot, reply, BOTS[late_bot]["color"])
+            console.print()
 
 def main():
-    console.print(Panel("🖥  Welcome to AI Chatroom!\nYour virtual software club is ready.", style="bold magenta"))
-    console.print("[dim]Commands: 'quit' to exit | 'debate [topic]' to start a debate | just chat normally![/dim]\n")
+    console.print(Panel(
+        "🖥  Welcome to AI Chatroom!\nYour virtual software club is online.",
+        style="bold magenta"
+    ))
+    console.print("[dim]Commands: 'debate [topic]' to start a debate | 'quit' to exit[/dim]\n")
 
     while True:
-        user_input = input("You: ").strip()
+        user_input = input("\nYou: ").strip()
 
         if user_input.lower() == "quit":
-            console.print("\n[bold magenta]See you later comrade![/bold magenta]")
+            console.print("\n[bold magenta]Later comrade! 👋[/bold magenta]")
             break
 
         if not user_input:
             continue
 
-        # Add your message to shared log
         shared_log.append({"speaker": "You", "message": user_input})
         console.print()
 
-        # Handle debate mode
+        # --- DEBATE MODE ---
         if user_input.lower().startswith("debate "):
             topic = user_input[7:]
-            console.print(f"[bold red]⚡ Debate started: {topic}[/bold red]\n")
+            console.print(f"[bold red]⚡ Debate: {topic}[/bold red]\n")
+
             for bot_name, bot_data in BOTS.items():
-                reply = chat_with_bot(bot_name, f"Give your strong opinion on: {topic}. Be opinionated and disagree with others if needed.", speaker="You")
+                typing_delay()
+                reply = chat_with_bot(
+                    bot_name,
+                    f"Give your strong personal opinion on: {topic}. Be opinionated, disagree with others if needed.",
+                    style="normal"
+                )
                 shared_log.append({"speaker": bot_name, "message": reply})
                 display_message(bot_name, reply, bot_data["color"])
+                console.print()
 
-            # One extra round of reactions
-            console.print("[dim]--- bots react to each other ---[/dim]\n")
-            for bot_name in list(BOTS.keys())[:2]:
-                last_message = shared_log[-1]["message"]
-                last_speaker = shared_log[-1]["speaker"]
-                reaction = chat_with_bot(bot_name, f"React to what {last_speaker} said.", speaker=last_speaker)
-                shared_log.append({"speaker": bot_name, "message": reaction})
-                display_message(bot_name, reaction, BOTS[bot_name]["color"])
+            # Reaction round
+            console.print("[dim]--- reactions ---[/dim]\n")
+            reactors = random.sample(list(BOTS.keys()), 2)
+            for bot_name in reactors:
+                last = shared_log[-1]
+                typing_delay()
+                reply = chat_with_bot(bot_name, last["message"], speaker=last["speaker"], style="short")
+                shared_log.append({"speaker": bot_name, "message": reply})
+                display_message(bot_name, reply, BOTS[bot_name]["color"])
+                console.print()
 
+        # --- NORMAL CHAT ---
         else:
-            # Normal chat — all bots respond to you
-            last_bot = None
-            last_reply = None
+            responders = decide_who_responds(user_input)
 
-            for bot_name, bot_data in BOTS.items():
-                reply = chat_with_bot(bot_name, user_input)
+            # Update silent streaks
+            for bot_name in BOTS:
+                if bot_name not in responders:
+                    BOTS[bot_name]["silent_streak"] += 1
+
+            for bot_name in responders:
+                style = get_reply_style()
+                typing_delay()
+                reply = chat_with_bot(bot_name, user_input, style=style)
                 shared_log.append({"speaker": bot_name, "message": reply})
-                display_message(bot_name, reply, bot_data["color"])
+                display_message(bot_name, reply, BOTS[bot_name]["color"])
+                console.print()
 
-                # 40% chance a bot reacts to the previous bot
-                if last_bot and random.random() < 0.4:
-                    console.print("[dim]--- side conversation ---[/dim]\n")
-                    bot_to_bot_round(last_bot, last_reply)
+                # 30% chance a bot reacts to another bot's message
+                if len(responders) > 1 and random.random() < 0.30:
+                    reactor = random.choice([n for n in responders if n != bot_name])
+                    typing_delay()
+                    reaction = chat_with_bot(reactor, reply, speaker=bot_name, style="very_short")
+                    shared_log.append({"speaker": reactor, "message": reaction})
+                    display_message(reactor, reaction, BOTS[reactor]["color"])
+                    console.print()
 
-                last_bot = bot_name
-                last_reply = reply
+            # Late joiner?
+            maybe_late_joiner(responders)
 
 if __name__ == "__main__":
     main()
